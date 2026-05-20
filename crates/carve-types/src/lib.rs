@@ -19,6 +19,7 @@
 
 pub mod attestation;
 pub mod commit;
+pub mod config;
 pub mod cross_cutting;
 pub mod error;
 pub mod plan;
@@ -27,6 +28,7 @@ pub mod ticket;
 
 pub use attestation::{BackupTag, BlakeHash};
 pub use commit::{CommitAssignment, CommitFingerprint, Confidence};
+pub use config::{CarveConfig, GitHubConfig, JiraConfig};
 pub use cross_cutting::{CrossCuttingCommit, SplitDecision, SplitHalf};
 pub use error::{Error, Result};
 pub use plan::{Plan, PlanMeta, SourceBranch};

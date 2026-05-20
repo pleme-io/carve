@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod cmd;
+mod config;
 mod git;
 mod github;
 mod jira;

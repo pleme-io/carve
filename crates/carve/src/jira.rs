@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// Carve's view of a JIRA sub-task — enough to fan an epic into stack
 /// nodes. The full Jira issue payload is much larger; we keep only what
@@ -14,6 +15,12 @@ pub struct SubTask {
     pub key: String,
     pub summary: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Transition {
+    pub id: String,
+    pub name: String,
 }
 
 pub struct Client {
@@ -80,5 +87,93 @@ impl Client {
                 status: i.fields.status.name,
             })
             .collect())
+    }
+
+    /// Set a single custom field (typically story points) to a numeric
+    /// value. Field id and value are policy-driven by [`carve_types::JiraConfig`].
+    pub fn set_number_field(&self, issue_key: &str, field_id: &str, value: f32) -> Result<()> {
+        let url = format!("{}/rest/api/2/issue/{}", self.base, issue_key);
+        let body = json!({ "fields": { field_id: value } });
+        let resp = self
+            .http
+            .put(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .json(&body)
+            .send()
+            .with_context(|| format!("PUT {url}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            anyhow::bail!("set_number_field({issue_key}, {field_id}={value}) failed: {status} — {text}");
+        }
+        Ok(())
+    }
+
+    /// List the transitions available from the issue's current state.
+    pub fn transitions(&self, issue_key: &str) -> Result<Vec<Transition>> {
+        let url = format!("{}/rest/api/2/issue/{}/transitions", self.base, issue_key);
+        #[derive(Deserialize)]
+        struct R {
+            transitions: Vec<Transition>,
+        }
+        let r: R = self
+            .http
+            .get(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .send()?
+            .error_for_status()?
+            .json()?;
+        Ok(r.transitions)
+    }
+
+    /// Apply a transition by id.
+    pub fn transition(&self, issue_key: &str, transition_id: &str) -> Result<()> {
+        let url = format!("{}/rest/api/2/issue/{}/transitions", self.base, issue_key);
+        let body = json!({ "transition": { "id": transition_id } });
+        let resp = self
+            .http
+            .post(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            anyhow::bail!("transition({issue_key} → id={transition_id}) failed: {status} — {text}");
+        }
+        Ok(())
+    }
+
+    /// Post a plain-text comment to a JIRA issue. The Cloud REST API
+    /// requires Atlassian Document Format (ADF) for the body, so we wrap
+    /// the supplied text in a single paragraph node.
+    #[allow(dead_code)]
+    pub fn add_comment(&self, issue_key: &str, text: &str) -> Result<()> {
+        let url = format!("{}/rest/api/3/issue/{}/comment", self.base, issue_key);
+        let body = json!({
+            "body": {
+                "version": 1,
+                "type": "doc",
+                "content": [{
+                    "type": "paragraph",
+                    "content": [{
+                        "type": "text",
+                        "text": text,
+                    }]
+                }]
+            }
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .basic_auth(&self.email, Some(&self.token))
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            anyhow::bail!("add_comment({issue_key}) failed: {status} — {text}");
+        }
+        Ok(())
     }
 }

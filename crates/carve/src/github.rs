@@ -44,3 +44,58 @@ pub fn edit_pr_body(pr: u64, body: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// Read a PR's current body (markdown).
+pub fn pr_body(pr: u64) -> Result<String> {
+    let out = Command::new("gh")
+        .args(["pr", "view", &pr.to_string(), "--json", "body", "--jq", ".body"])
+        .output()
+        .context("spawn gh pr view")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "gh pr view {} failed: {}",
+            pr,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(out.stdout)?.trim_end_matches('\n').to_string())
+}
+
+/// Read a PR's state (`OPEN` / `CLOSED` / `MERGED`).
+pub fn pr_state(pr: u64) -> Result<String> {
+    let out = Command::new("gh")
+        .args(["pr", "view", &pr.to_string(), "--json", "state", "--jq", ".state"])
+        .output()
+        .context("spawn gh pr view")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "gh pr view {} failed: {}",
+            pr,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(out.stdout)?.trim().to_string())
+}
+
+/// Find the open PR (if any) for a given head branch.
+pub fn pr_for_branch(branch: &str) -> Result<Option<u64>> {
+    let out = Command::new("gh")
+        .args([
+            "pr", "list", "--head", branch, "--state", "all",
+            "--json", "number,state", "--jq", ".[0].number // \"\"",
+        ])
+        .output()
+        .context("spawn gh pr list")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "gh pr list --head {} failed: {}",
+            branch,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let s = String::from_utf8(out.stdout)?.trim().to_string();
+    if s.is_empty() || s == "\"\"" {
+        return Ok(None);
+    }
+    Ok(Some(s.parse()?))
+}

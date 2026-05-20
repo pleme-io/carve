@@ -30,16 +30,49 @@ single branch  ──→  carve  ──→  stacked PRs  ──→  vitrine  ─
 
 ## Subcommands
 
-| Command           | Status   | Purpose                                                                       |
-| ----------------- | -------- | ----------------------------------------------------------------------------- |
-| `carve plan`      | v0.1 ✅  | Walk current branch, fetch JIRA epic children, emit `plan.yaml` for editing.  |
-| `carve verify`    | v0.1 ✅  | Dry-run: invariant + cross-cutting + unassigned checks.                       |
-| `carve execute`   | v0.2     | Build branches, BLAKE3-attested backup tag, tree-hash gate, push, open PRs.   |
-| `carve jira-sync` | v0.3     | Story points + status transitions + ADF comments with PR links.               |
-| `carve restack`   | v0.4     | Replay descendants after a fix lands on a parent PR.                          |
-| `carve diagram`   | v0.5     | Idempotent ASCII stack-diagram regeneration inside PR bodies.                 |
-| `carve gate`      | v0.5     | CI hook: refuse out-of-order merges.                                          |
-| `carve status`    | v0.5     | Stack health snapshot: merge state, base drift, JIRA divergence.              |
+All eight subcommands ship in v0.1. Each is real, none is stubbed.
+
+| Command           | Purpose                                                                       |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `carve plan`      | Walk current branch, fetch JIRA epic children, emit `plan.yaml` for editing.  |
+| `carve verify`    | Dry-run: invariant + cross-cutting + unassigned checks.                       |
+| `carve execute`   | Build branches, BLAKE3-attested backup tag, tree-hash gate, push, open PRs.   |
+| `carve jira-sync` | Story points + status transitions, policy-aware (configurable per JIRA system). |
+| `carve restack`   | Replay descendants after a fix lands on a parent PR (`git rebase --onto`).    |
+| `carve diagram`   | Idempotent ASCII stack-diagram regeneration inside PR bodies.                 |
+| `carve gate`      | CI hook: refuse out-of-order merges by checking parent-PR state.              |
+| `carve status`    | Stack health snapshot: merge state, base drift, JIRA divergence.              |
+
+## Configuration
+
+JIRA and GitHub conventions differ across orgs (custom-field ids, workflow shape,
+story-point scale, what automation is allowed to do). Carve reads layered TOML
+config so it adapts without code changes:
+
+```
+1. Built-in defaults
+2. ~/.config/carve/config.toml     (user-global)
+3. <repo>/.carve.toml              (repo-local — wins)
+```
+
+Example `.carve.toml`:
+
+```toml
+[jira]
+story_points_field = "customfield_10016"
+points_per_day = 1            # our team: 1 point = 1 day
+max_auto_transition = "In Review"   # cap automation at this state
+
+[jira.transition_ids]         # optional: pin ids to skip per-issue lookup
+"In Review" = 41
+
+[github]
+default_reviewer = "luis-d"
+```
+
+The `max_auto_transition` knob enforces team-specific automation policy. If a
+ticket asks for a transition past the cap, carve emits a clear warning and
+leaves the advancement to a human.
 
 ## Quickstart
 

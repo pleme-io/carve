@@ -14,25 +14,35 @@ in May 2026 from the ASM-18003 DBK staging asia-southeast1 rollout,
 which we did entirely by hand — that surgery is the v0.1 regression
 fixture.
 
-## Subcommands (implemented)
+## Subcommands (all implemented in v0.1)
 
 ```bash
 carve plan --epic <KEY>        # walk branch, fetch JIRA epic children,
                                # emit plan.yaml shell for operator editing
-
 carve verify                   # dry-run invariants on plan.yaml
+carve execute                  # backup tag + branches + tree-hash gate + push + PRs
+carve jira-sync                # story points + transitions, policy-capped
+carve restack --from <BRANCH>  # replay descendants after parent-PR fix
+carve diagram                  # idempotent PR-body stack diagram refresh
+carve gate --pr <N>            # CI hook: refuse out-of-order merge
+carve status                   # stack health snapshot
 ```
 
-## Subcommands (stub — to implement)
+## Configuration
 
-| Cmd               | Target | Notes                                                              |
-| ----------------- | ------ | ------------------------------------------------------------------ |
-| `carve execute`   | v0.2   | Build branches + tree-hash gate + push + open PRs.                 |
-| `carve jira-sync` | v0.3   | Story points + transitions + ADF comments.                         |
-| `carve restack`   | v0.4   | Replay descendants after parent-PR fix.                            |
-| `carve diagram`   | v0.5   | Idempotent PR-body stack-diagram regen.                            |
-| `carve gate`      | v0.5   | CI hook to refuse out-of-order merges.                             |
-| `carve status`    | v0.5   | Stack health snapshot.                                             |
+Per-team/per-repo TOML, layered:
+
+```
+1. Built-in defaults
+2. ~/.config/carve/config.toml     (user-global)
+3. <repo>/.carve.toml              (repo-local — wins)
+```
+
+Key knobs:
+- `jira.story_points_field` — custom-field id (default `customfield_10016`)
+- `jira.points_per_day` — operator-days → story points scale (default 1.0)
+- `jira.max_auto_transition` — policy cap on auto-transitions (default `"In Review"`)
+- `jira.transition_ids` — optional pinning of transition ids by name
 
 ## Build / Run
 

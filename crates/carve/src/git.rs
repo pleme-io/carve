@@ -6,6 +6,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use carve_types::{CommitFingerprint, commit::CommitSha};
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 /// Run a git command, capturing stdout. Empty stdout is fine; any non-zero
@@ -129,6 +130,174 @@ pub fn default_remote_branch() -> Result<String> {
     anyhow::bail!(
         "could not determine default remote branch — set `git remote set-head origin --auto` or pass --master explicitly"
     )
+}
+
+/// Check out a new branch starting at `start_point`. Fails if the branch
+/// already exists (use [`branch_force_create`] for the recreate case).
+pub fn checkout_new_branch(name: &str, start_point: &str) -> Result<()> {
+    git(&["checkout", "-b", name, start_point])?;
+    Ok(())
+}
+
+/// Force-create a branch at `start_point`, discarding the previous tip if
+/// it existed. Used by `carve execute --force`.
+pub fn branch_force_create(name: &str, start_point: &str) -> Result<()> {
+    git(&["checkout", "-B", name, start_point])?;
+    Ok(())
+}
+
+/// Does a local branch with this name exist?
+pub fn branch_exists(name: &str) -> bool {
+    git(&["show-ref", "--quiet", &format!("refs/heads/{name}")]).is_ok()
+}
+
+/// Cherry-pick a commit onto the current branch. Returns an error
+/// containing the conflicting paths if cherry-pick fails — the caller
+/// should `cherry-pick --abort` and surface the conflict.
+pub fn cherry_pick(sha: &str) -> Result<()> {
+    git(&["cherry-pick", sha]).with_context(|| format!("cherry-pick {sha}"))?;
+    Ok(())
+}
+
+/// Abort an in-progress cherry-pick.
+#[allow(dead_code)]
+pub fn cherry_pick_abort() -> Result<()> {
+    // Don't fail if there's nothing to abort; some callers use this as
+    // belt-and-suspenders cleanup.
+    let _ = git(&["cherry-pick", "--abort"]);
+    Ok(())
+}
+
+/// Apply just the path-restricted slice of a commit's diff. Used for
+/// cross-cutting commit splits — runs `git show <sha> -- <paths> | git apply`.
+/// The diff is path-filtered by git itself, so only hunks for the
+/// requested paths are emitted.
+pub fn apply_commit_slice(sha: &str, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        anyhow::bail!("apply_commit_slice: paths must be non-empty");
+    }
+    // Build args: git show <sha> -- <paths...>
+    let mut show_args: Vec<&str> = vec!["show", sha, "--"];
+    for p in paths {
+        show_args.push(p);
+    }
+    let show = Command::new("git")
+        .args(&show_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn git show")?;
+    let show_out = show.wait_with_output().context("wait git show")?;
+    if !show_out.status.success() {
+        anyhow::bail!(
+            "git show {sha} -- {:?} failed: {}",
+            paths,
+            String::from_utf8_lossy(&show_out.stderr).trim()
+        );
+    }
+    if show_out.stdout.is_empty() {
+        anyhow::bail!(
+            "git show {sha} -- {:?} produced empty diff — paths may not match anything",
+            paths
+        );
+    }
+
+    // Pipe the diff into `git apply`.
+    let mut apply = Command::new("git")
+        .args(["apply"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn git apply")?;
+    apply
+        .stdin
+        .as_mut()
+        .context("apply stdin")?
+        .write_all(&show_out.stdout)?;
+    let apply_out = apply.wait_with_output().context("wait git apply")?;
+    if !apply_out.status.success() {
+        anyhow::bail!(
+            "git apply (slice of {sha}) failed: {}",
+            String::from_utf8_lossy(&apply_out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Stage all changes under the given paths and commit with the supplied
+/// metadata. Used after [`apply_commit_slice`] to commit a split half.
+pub fn commit_with_metadata(
+    paths: &[String],
+    message: &str,
+    author: &str,
+    author_date: &str,
+) -> Result<String> {
+    // Stage only the paths the split actually touched.
+    if paths.is_empty() {
+        anyhow::bail!("commit_with_metadata: paths must be non-empty");
+    }
+    let mut add_args: Vec<&str> = vec!["add", "--"];
+    for p in paths {
+        add_args.push(p);
+    }
+    git(&add_args).context("git add")?;
+    git(&[
+        "-c",
+        "core.editor=true",
+        "commit",
+        "-m",
+        message,
+        "--author",
+        author,
+        "--date",
+        author_date,
+    ])
+    .context("git commit")?;
+    Ok(git(&["rev-parse", "HEAD"])?.trim().to_string())
+}
+
+/// Create an empty `--allow-empty` commit on the current branch. Used for
+/// placeholder ticket nodes that have no repo-side scope.
+pub fn commit_empty(message: &str) -> Result<String> {
+    git(&[
+        "-c",
+        "core.editor=true",
+        "commit",
+        "--allow-empty",
+        "-m",
+        message,
+    ])?;
+    Ok(git(&["rev-parse", "HEAD"])?.trim().to_string())
+}
+
+/// Annotated tag with a multi-line message. `target` may be a SHA or ref.
+pub fn create_annotated_tag(name: &str, target: &str, message: &str) -> Result<()> {
+    git(&["tag", "-a", name, target, "-m", message])?;
+    Ok(())
+}
+
+/// Push a list of refs to origin. Uses `--force-with-lease` so we never
+/// clobber upstream work we didn't see — a fresh fetch is required if
+/// someone else updated the same branch.
+pub fn push_with_lease(refs: &[&str]) -> Result<String> {
+    let mut args: Vec<&str> = vec!["push", "--force-with-lease", "origin"];
+    for r in refs {
+        args.push(r);
+    }
+    git(&args)
+}
+
+/// Push a tag to origin. Tags are append-only — no force needed.
+pub fn push_tag(name: &str) -> Result<String> {
+    git(&["push", "origin", name])
+}
+
+/// Whether the working tree (and index) has any modifications. Used by
+/// execute to refuse to start in a dirty repo.
+pub fn working_tree_clean() -> Result<bool> {
+    let out = git(&["status", "--porcelain"])?;
+    Ok(out.trim().is_empty())
 }
 
 #[cfg(test)]
