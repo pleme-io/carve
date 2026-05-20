@@ -64,6 +64,13 @@ pub struct JiraConfig {
     /// integration to handle linking.
     #[serde(default)]
     pub link_pr_as_remote: bool,
+
+    /// Post a simple ADF comment on each synced ticket noting the PR
+    /// number/URL carve associated with it. Useful when the JIRA-GitHub
+    /// integration is off or unreliable. Default false to avoid
+    /// duplicate-comment noise when integrations *are* on.
+    #[serde(default)]
+    pub post_pr_link_comment: bool,
 }
 
 impl Default for JiraConfig {
@@ -74,6 +81,7 @@ impl Default for JiraConfig {
             max_auto_transition: Some("In Review".into()),
             transition_ids: std::collections::BTreeMap::new(),
             link_pr_as_remote: false,
+            post_pr_link_comment: false,
         }
     }
 }

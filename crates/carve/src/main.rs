@@ -27,12 +27,14 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Analyse the current branch and emit a plan.yaml the operator can
-    /// hand-edit before execution.
+    /// hand-edit before execution. With --refresh, re-score an existing
+    /// plan.yaml against its current ticket scope path-globs.
     Plan {
         /// JIRA epic key (e.g. ASM-18003). Sub-tickets are fetched
-        /// automatically.
+        /// automatically. Ignored with --refresh (epic is taken from the
+        /// existing plan).
         #[arg(long)]
-        epic: String,
+        epic: Option<String>,
         /// Branch to carve. Defaults to the current branch.
         #[arg(long)]
         branch: Option<String>,
@@ -43,9 +45,17 @@ enum Command {
         /// override.
         #[arg(long)]
         master: Option<String>,
-        /// Output path for the generated plan.yaml.
+        /// Output path for the generated plan.yaml. With --refresh, this
+        /// is also the *input* — the existing plan is read, re-scored,
+        /// and written back to the same path.
         #[arg(long, short, default_value = "plan.yaml")]
         out: PathBuf,
+        /// Re-score assignments against the path-globs currently
+        /// declared on the existing plan's ticket scopes. Preserves any
+        /// assignment marked OperatorPinned and any cross-cutting
+        /// decision the operator has already made.
+        #[arg(long)]
+        refresh: bool,
     },
 
     /// Verify a plan.yaml without mutating anything — dry-run, checks all
@@ -126,11 +136,13 @@ fn main() -> Result<()> {
             branch,
             master,
             out,
+            refresh,
         } => cmd::plan::run(cmd::plan::Args {
             epic,
             branch,
             master_override: master,
             out,
+            refresh,
         })
         .context("carve plan"),
         Command::Verify { plan } => cmd::verify::run(plan).context("carve verify"),

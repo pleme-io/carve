@@ -14,7 +14,7 @@
 //! in *days*, and the config's `points_per_day` factor maps it to the
 //! number recorded in JIRA. Default: 1 point = 1 day.
 
-use crate::{config, jira};
+use crate::{config, github, jira};
 use anyhow::{Context, Result};
 use carve_types::Plan;
 use colored::Colorize;
@@ -36,9 +36,29 @@ pub fn run(args: Args) -> Result<()> {
     let client = jira::Client::from_env().context("create JIRA client")?;
     let policy = &cfg.jira;
 
+    // Build a ticket → PR-url map. Each ticket has a stack node; each
+    // node has a branch; the open/recently-closed PR for that branch is
+    // what we link. Looking these up once at the top is cheaper than
+    // re-querying inside the per-ticket loop.
+    let pr_by_ticket: std::collections::HashMap<String, (u64, String)> = plan
+        .stack
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            let pr = github::pr_for_branch(&n.branch).ok().flatten()?;
+            let url = format!(
+                "https://github.com/{}/{}",
+                pr_owner_repo().unwrap_or_else(|| "owner/repo".into()),
+                format!("pull/{pr}"),
+            );
+            Some((n.ticket.to_string(), (pr, url)))
+        })
+        .collect();
+
     let mut points_set = 0usize;
     let mut transitions_done = 0usize;
     let mut skipped_past_max = 0usize;
+    let mut comments_posted = 0usize;
 
     for t in &plan.tickets {
         let key = t.key.to_string();
@@ -101,14 +121,33 @@ pub fn run(args: Args) -> Result<()> {
                 id
             );
         }
+
+        // 3. Optional ADF comment linking the PR.
+        if policy.post_pr_link_comment {
+            if let Some((pr, url)) = pr_by_ticket.get(&key) {
+                let text = format!("Carve linked this ticket to PR #{pr}: {url}");
+                client
+                    .add_comment(&key, &text)
+                    .with_context(|| format!("post PR-link comment on {key}"))?;
+                comments_posted += 1;
+                println!(
+                    "{} {} comment posted (PR #{pr})",
+                    "✓".green(),
+                    key.bold()
+                );
+            } else {
+                tracing::debug!(ticket = %key, "post_pr_link_comment enabled but no PR found for branch");
+            }
+        }
     }
 
     println!();
     println!(
-        "{}: {} points set, {} transitions, {} skipped past policy cap",
+        "{}: {} points set, {} transitions, {} comments, {} skipped past policy cap",
         "DONE".green().bold(),
         points_set,
         transitions_done,
+        comments_posted,
         skipped_past_max,
     );
     if skipped_past_max > 0 {
@@ -119,4 +158,21 @@ pub fn run(args: Args) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Best-effort owner/repo extraction from `git config remote.origin.url`.
+/// Falls back to `None` if it can't be determined; callers render a
+/// placeholder URL in that case.
+fn pr_owner_repo() -> Option<String> {
+    let raw = crate::git::git(&["config", "--get", "remote.origin.url"]).ok()?;
+    let raw = raw.trim();
+    // SSH: git@github.com:owner/repo.git
+    if let Some(rest) = raw.strip_prefix("git@github.com:") {
+        return Some(rest.trim_end_matches(".git").to_string());
+    }
+    // HTTPS: https://github.com/owner/repo(.git)
+    if let Some(rest) = raw.strip_prefix("https://github.com/") {
+        return Some(rest.trim_end_matches(".git").trim_end_matches('/').to_string());
+    }
+    None
 }
