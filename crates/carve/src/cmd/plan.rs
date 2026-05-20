@@ -38,7 +38,7 @@ use std::path::PathBuf;
 pub struct Args {
     pub epic: String,
     pub branch: Option<String>,
-    pub master: String,
+    pub master_override: Option<String>,
     pub out: PathBuf,
 }
 
@@ -48,21 +48,28 @@ pub fn run(args: Args) -> Result<()> {
         None => git::current_branch().context("could not determine current branch")?,
     };
     let tip = git::resolve(&branch)?;
-    // Prefer origin/<master> when no local <master> exists — this is the
-    // common case in disposable worktrees built off a fetch.
-    let master_ref = if git::resolve(&args.master).is_ok() {
-        args.master.clone()
-    } else {
-        let remote = format!("origin/{}", args.master);
-        if git::resolve(&remote).is_ok() {
-            tracing::info!(used = %remote, "no local {} branch found; falling back to origin remote", args.master);
-            remote
-        } else {
-            anyhow::bail!(
-                "neither '{}' nor 'origin/{}' resolves — check --master flag",
-                args.master,
-                args.master
-            );
+    // Master ref: explicit override, else auto-detect from the remote's
+    // HEAD. pleme-io repos are typically `origin/main`; akeyless-environments
+    // is `origin/master`. Auto-detect via `git symbolic-ref` makes carve
+    // work uniformly across both without operator-supplied flags.
+    let master_ref = match args.master_override.as_deref() {
+        Some(m) if git::resolve(m).is_ok() => m.to_string(),
+        Some(m) => {
+            let remote = format!("origin/{m}");
+            if git::resolve(&remote).is_ok() {
+                tracing::info!(used = %remote, "no local '{}' branch found; using '{}'", m, remote);
+                remote
+            } else {
+                anyhow::bail!(
+                    "--master {m} doesn't resolve as '{m}' or 'origin/{m}'",
+                    m = m
+                );
+            }
+        }
+        None => {
+            let detected = git::default_remote_branch().context("auto-detect master ref")?;
+            tracing::info!(used = %detected, "auto-detected remote default branch");
+            detected
         }
     };
     let master_sha = git::resolve(&master_ref)?;
@@ -138,13 +145,13 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let stack = StackTopology {
-        root: args.master.clone(),
+        root: master_ref.clone(),
         nodes: tickets
             .iter()
             .enumerate()
             .map(|(idx, t)| {
                 let base = if idx == 0 {
-                    args.master.clone()
+                    master_ref.clone()
                 } else {
                     derive_branch_name(&tickets[idx - 1])
                 };
@@ -173,7 +180,7 @@ pub fn run(args: Args) -> Result<()> {
         },
         source: SourceBranch {
             name: branch,
-            master_branch: args.master,
+            master_branch: master_ref,
             tip,
             merge_base,
         },

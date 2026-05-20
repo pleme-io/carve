@@ -35,13 +35,13 @@ enum Command {
         /// Branch to carve. Defaults to the current branch.
         #[arg(long)]
         branch: Option<String>,
-        /// Ref the stack should ultimately root on. Default
-        /// `origin/master` because operators typically work in worktrees
-        /// fetched off the remote and the local `master` is often stale.
-        /// Pass `--master main` (or `--master origin/main`) for other
-        /// repos.
-        #[arg(long, default_value = "origin/master")]
-        master: String,
+        /// Ref the stack should ultimately root on. If omitted, carve
+        /// reads `refs/remotes/origin/HEAD` and uses whatever the remote
+        /// says is the default branch (typically `origin/main` for new
+        /// repos, `origin/master` for older ones). Pass explicitly to
+        /// override.
+        #[arg(long)]
+        master: Option<String>,
         /// Output path for the generated plan.yaml.
         #[arg(long, short, default_value = "plan.yaml")]
         out: PathBuf,
@@ -128,7 +128,7 @@ fn main() -> Result<()> {
         } => cmd::plan::run(cmd::plan::Args {
             epic,
             branch,
-            master,
+            master_override: master,
             out,
         })
         .context("carve plan"),

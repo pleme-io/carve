@@ -110,6 +110,27 @@ pub fn repo_root() -> Result<std::path::PathBuf> {
     Ok(std::path::PathBuf::from(out.trim()))
 }
 
+/// The remote's default branch, fully qualified (e.g. `origin/main` or
+/// `origin/master`). Resolved by reading `refs/remotes/origin/HEAD` — the
+/// canonical, repo-aware answer that handles main/master/trunk/etc.
+/// uniformly. Falls back to probing `origin/main` then `origin/master`
+/// in case `origin/HEAD` is unset on a freshly-cloned repo.
+pub fn default_remote_branch() -> Result<String> {
+    if let Ok(out) = git(&["symbolic-ref", "refs/remotes/origin/HEAD"]) {
+        let raw = out.trim();
+        // strip the `refs/remotes/` prefix → `origin/main`
+        return Ok(raw.trim_start_matches("refs/remotes/").to_string());
+    }
+    for cand in &["origin/main", "origin/master"] {
+        if resolve(cand).is_ok() {
+            return Ok((*cand).to_string());
+        }
+    }
+    anyhow::bail!(
+        "could not determine default remote branch — set `git remote set-head origin --auto` or pass --master explicitly"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
