@@ -4,3 +4,4 @@
 .direnv/
 .envrc
 plan.yaml
+Cargo.build-spec.json
